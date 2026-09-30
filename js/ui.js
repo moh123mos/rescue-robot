@@ -38,14 +38,14 @@
       const t = el("div", "tp " + (i === 0 ? "red" : "blue"));
       t.id = "tp" + i;
       Object.assign(t.style, { left: p.x + "px", top: p.y + "px", width: p.w + "px", height: p.h + "px" });
-      t.innerHTML = `<div class="badge">🐾</div><div class="ttl">${names[i]}</div>
+      t.innerHTML = `<div class="badge"><img alt=""></div><div class="ttl">${names[i]}</div>
         <input class="nm" maxlength="18" aria-label="اسم ${names[i]}" placeholder="اكتبوا اسم الفريق">
         <div class="stars">${Array(5).fill('<div class="star">' + STAR + "</div>").join("")}</div>
         <div class="lvl">Level <b>1</b></div><div class="cnt">0</div>
         <div class="pw"><span>Rescue Power</span><div class="bar">${'<div class="seg"></div>'.repeat(5)}</div></div>
         <div class="extra"></div>`;
       hud.appendChild(t);
-      teamEls.push({ root: t, name: $(".nm", t), stars: [...t.querySelectorAll(".star")], lvl: $(".lvl b", t), cnt: $(".cnt", t), segs: [...t.querySelectorAll(".seg")], extra: $(".extra", t) });
+      teamEls.push({ root: t, badge: $(".badge", t), name: $(".nm", t), stars: [...t.querySelectorAll(".star")], lvl: $(".lvl b", t), cnt: $(".cnt", t), segs: [...t.querySelectorAll(".seg")], extra: $(".extra", t) });
     });
 
     // لوحة النرد
@@ -60,7 +60,7 @@
     // دور الفريق
     const turn = el("div", "wood"); turn.id = "turnPanel"; turn.style.cursor = "default";
     Object.assign(turn.style, { left: "10px", top: "587px", width: "172px", height: "142px" });
-    turn.innerHTML = `<img class="bg" src="assets/panel_turn.png" alt=""><div id="turnPawns"><img id="tpawn0" src="assets/turn_red.png" style="left:28px" alt=""><img id="tpawn1" src="assets/turn_blue.png" style="left:86px" alt=""></div>`;
+    turn.innerHTML = `<img class="bg" src="assets/panel_turn.png" alt=""><div id="turnPawns"><div class="tslot" id="tslot0" style="left:4px"><i class="tring r"></i><img id="tpawn0" alt=""></div><div class="tslot" id="tslot1" style="left:88px"><i class="tring b"></i><img id="tpawn1" alt=""></div></div>`;
     hud.appendChild(turn);
 
     // بطاقات اللعبة
@@ -106,6 +106,43 @@
     const p = $("#tpawn" + i);
     if (!reduced) g.gsap.fromTo(p, { y: 0 }, { y: -14, duration: .18, yoyo: true, repeat: 3, ease: "power2.out", onComplete: () => g.gsap.set(p, { y: 0 }) });
   };
+  /* ---------------------------------------------------------------- الشخصيات في الـ HUD */
+  const hopEl = e => { if (!e || reduced) return; e.classList.remove("hop"); void e.offsetWidth; e.classList.add("hop"); };
+  UI.refreshCharacters = function () {
+    const C = g.Chars; if (!C || !C.ready) return;
+    C.unbindTag("turn"); C.unbindTag("badge");
+    [0, 1].forEach(ti => {
+      const id = C.assigned[ti]; if (!id) return;
+      const badgeImg = $("img", teamEls[ti].badge), tp = $("#tpawn" + ti);
+      badgeImg.src = C.url(id, "portrait", true); tp.src = C.url(id, "idle");
+      C.bind("turn", ti, pose => { tp.src = C.url(id, pose); });
+      teamEls[ti].badge.onclick = tp.onclick = $("#tslot" + ti).onclick = () => C.poke(ti);
+    });
+  };
+  if (g.Chars) g.Chars.hopListeners.push(ti => { hopEl(teamEls[ti] && teamEls[ti].badge); hopEl($("#tslot" + ti)); });
+
+  /* فقاعة كلام فوق البيدق (داخل #hud فتتبع الكاميرا تلقائياً) */
+  const bubbles = [null, null];
+  UI.bubble = function (ti, text, ms = 2000) {
+    const old = bubbles[ti]; if (old) { old.kill(); }
+    const b = el("div", "bubble " + (ti === 0 ? "red" : "blue"), text); hud.appendChild(b);
+    const follow = () => {
+      const w = g.View.pawnWorld(ti), h = g.View.pawnHeight(ti), bw = b.offsetWidth, bh = b.offsetHeight;
+      let x = Math.max(bw / 2 + 8, Math.min(1254 - bw / 2 - 8, w.x)), y = w.y - h - 16;
+      const o = bubbles[1 - ti];    // تجنّب تراكب فقاعتي الفريقين
+      if (o && o.el.isConnected && ti === 1 && Math.abs(parseFloat(o.el.style.left) - x) < (bw + o.el.offsetWidth) / 2 + 6) y -= o.el.offsetHeight + 8;
+      const below = y - bh < 6; if (below) y = w.y + 30 + bh;
+      b.classList.toggle("below", below); b.style.left = x + "px"; b.style.top = y + "px";
+      b.style.setProperty("--tail", (w.x - x) + "px");
+    };
+    g.gsap.ticker.add(follow); follow();
+    const kill = () => { g.gsap.ticker.remove(follow); clearTimeout(tm); g.gsap.killTweensOf(b); b.remove(); if (bubbles[ti] && bubbles[ti].el === b) bubbles[ti] = null; };
+    g.gsap.fromTo(b, { scale: .3, opacity: 0 }, { scale: 1, opacity: 1, duration: .28, ease: "back.out(2.4)" });
+    const tm = setTimeout(() => g.gsap.to(b, { opacity: 0, y: "-=8", duration: .25, onComplete: kill }), ms);
+    bubbles[ti] = { el: b, kill };
+  };
+  if (g.Chars) g.Chars.addSink("pawn", (ti, text, ms) => { UI.bubble(ti, text, ms); return true; });
+
   UI.setDie = function (v) {
     hudDie.classList.toggle("hide-qm", v != null);
     [...hudDie.querySelectorAll("i")].forEach((p, k) => p.classList.toggle("on", v != null && PIPS[v].includes(k)));
@@ -158,7 +195,24 @@
   });
 
   function closeAnim(node, dur = .3) {
-    return new Promise(res => g.gsap.to(node, { opacity: 0, scale: .92, duration: reduced ? .01 : dur, ease: "power2.in", onComplete: () => { node.remove(); res(); } }));
+    return new Promise(res => g.gsap.to(node, { opacity: 0, scale: .92, duration: reduced ? .01 : dur, ease: "power2.in", onComplete: () => { if (node._cleanup) node._cleanup(); node.remove(); res(); } }));
+  }
+
+  /* شخصية الفريق بجانب النافذة: تتفاعل (happy/sad)، تتكلّم بفقاعة، وتُنقَر لتضحك */
+  const modalChars = [null, null];
+  if (g.Chars) g.Chars.hopListeners.push(ti => hopEl(modalChars[ti]));
+  function attachModalChar(back, ti) {
+    const C = g.Chars; if (!C || !C.ready || ti == null || !C.assigned[ti]) return null;
+    const id = C.assigned[ti];
+    const wrap = el("div", "card-char " + (ti === 0 ? "red" : "blue"), '<div class="cc-bubble"></div><img alt="">');
+    const img = $("img", wrap), bub = $(".cc-bubble", wrap); let tm;
+    img.src = C.url(id, "idle"); img.onclick = () => C.poke(ti);
+    back.appendChild(wrap); modalChars[ti] = wrap;
+    C.bind("modal", ti, pose => { img.src = C.url(id, pose); });
+    C.addSink("modal", (t, text, ms) => { if (t !== ti) return false; bub.textContent = text; bub.classList.add("on"); clearTimeout(tm); tm = setTimeout(() => bub.classList.remove("on"), ms); return true; });
+    back._cleanup = () => { C.unbindTag("modal"); C.removeSink("modal"); clearTimeout(tm); modalChars[ti] = null; };
+    if (!reduced) g.gsap.fromTo(wrap, { y: 90, opacity: 0 }, { y: 0, opacity: 1, duration: .5, delay: .75, ease: "back.out(1.8)" });
+    return wrap;
   }
 
   function makeTimer(sec, onEnd) {
@@ -199,7 +253,7 @@
       face.innerHTML = `${tag}${ico}<h2 class="card-title">${fmt(card.title)}</h2><p class="card-text">${fmt(card.text)}</p><div class="slot"></div>`;
       const slot = $(".slot", face);
       const bk = el("div", "card-back", "؟");
-      c3.append(face, bk); back.appendChild(c3); root().appendChild(back);
+      c3.append(face, bk); back.appendChild(c3); root().appendChild(back); attachModalChar(back, o.ti);
       if (o.bonusText) face.insertBefore(el("div", "note", fmt(o.bonusText)), $(".slot", face));
 
       let done = false, revealed = false, timer = null;
@@ -220,6 +274,7 @@
         slot.querySelectorAll("button").forEach(b => b.disabled = true);
         setKeys(null);
         const rect = c3.getBoundingClientRect();
+        if (o.ti != null && g.Chars) g.Chars.react(o.ti, correct ? "happy" : "sad", { say: correct ? "correct" : "wrong", sayDelay: 150 });
         if (correct) {
           g.Sfx.correct();
           g.gsap.fromTo(face, { boxShadow: "0 0 0 0 rgba(63,191,79,.0)" }, { boxShadow: "0 0 0 18px rgba(63,191,79,.6), 0 0 80px 30px rgba(120,255,140,.7)", duration: .35, yoyo: true, repeat: 1 });
@@ -314,7 +369,7 @@
   };
 
   /* ---------------------------------------------------------------- اختر طريقك */
-  UI.showChoose = function (teamName) {
+  UI.showChoose = function (teamName, ti) {
     return new Promise(resolve => {
       const back = el("div", "backdrop");
       const c3 = el("div", "card3d"); c3.style.setProperty("--cc", TYPES.choose.color);
@@ -325,7 +380,7 @@
           <button class="pathbtn" data-k="safe"><span class="arrows">⬅ ⬆ ➡</span>الطريق الآمن<small>تقدّم خطوة واحدة</small></button>
           <button class="pathbtn hard" data-k="hard"><span class="arrows">⬅ ⬆ ➡</span>الطريق الصعب<small>تقدّم ${fmt("3")} خطوات</small></button>
         </div>`;
-      c3.appendChild(face); back.appendChild(c3); root().appendChild(back);
+      c3.appendChild(face); back.appendChild(c3); root().appendChild(back); attachModalChar(back, ti);
       face.querySelectorAll(".pathbtn").forEach(b => b.onclick = async () => {
         g.Sfx.click(); setKeys(null);
         const k = b.dataset.k; await closeAnim(back, .25); resolve(k);
@@ -352,7 +407,7 @@
         btn.onclick = async () => { g.Sfx.click(); setKeys(null); await closeAnim(back, .25); resolve(i); };
         row.appendChild(btn);
       });
-      c3.appendChild(face); back.appendChild(c3); root().appendChild(back);
+      c3.appendChild(face); back.appendChild(c3); root().appendChild(back); attachModalChar(back, o.ti);
       setKeys({ onEnter: () => row.firstChild.click(), onEsc: () => row.lastChild.click() });
       g.Sfx[o.sfx || "flip"]();
       g.gsap.fromTo(back, { opacity: 0 }, { opacity: 1, duration: .25 });
@@ -394,28 +449,57 @@
   };
 
   /* ---------------------------------------------------------------- شاشة البداية */
-  UI.showSplash = function (names) {
+  UI.showSplash = function (names, chars) {
+    const C = g.Chars, list = (C && C.ready) ? C.list : [];
+    const sel = [chars && chars[0], chars && chars[1]];
+    if (!list.find(c => c.id === sel[0])) sel[0] = list[0] && list[0].id;
+    if (!list.find(c => c.id === sel[1]) || sel[1] === sel[0]) sel[1] = (list.find(c => c.id !== sel[0]) || {}).id;
+    const auto = [true, true];
+    const defName = i => { const c = C && C.byId[sel[i]]; return c ? `فريق ${c.name}` : ["فريق الشعلة", "فريق البرق"][i]; };
     return new Promise(resolve => {
       const sp = el("div", "splash");
+      const grid = i => `<div class="char-grid" data-t="${i}">${list.map(c => `<button class="char-opt" data-id="${c.id}" aria-label="${c.name}"><img src="${C.url(c.id, "idle")}" alt=""><span>${c.name}</span></button>`).join("")}</div>`;
       sp.innerHTML = `<div class="splash-card">
-        <div style="font-size:calc(var(--u)*7)">🤖🔋</div>
         <h1>إنقاذ <em>الروبوت</em> من الحفرة</h1>
-        <p>الروبوت «حاسوب» فقد طاقته وتناثرت شفرات تشغيله في مدينة الأرقام!<br>تسابقوا لجمع شفرات الطاقة عبر الجولات وأنقذوه معاً.</p>
+        <p>الروبوت «حاسوب» فقد طاقته وتناثرت شفرات تشغيله في مدينة الأرقام!<br>اختاروا شخصية فريقكم وتسابقوا لجمع شفرات الطاقة وإنقاذه معاً.</p>
         <div class="teams-in">
-          <div class="team-in red">🔥 الفريق الأول (الشعلة)<input id="sn0" maxlength="18" value=""></div>
-          <div class="team-in blue">⚡ الفريق الثاني (البرق)<input id="sn1" maxlength="18" value=""></div>
+          <div class="team-in red"><b>الفريق الأول</b>${grid(0)}<input id="sn0" maxlength="18" value="" placeholder="اسم الفريق"></div>
+          <div class="team-in blue"><b>الفريق الثاني</b>${grid(1)}<input id="sn1" maxlength="18" value="" placeholder="اسم الفريق"></div>
         </div>
         <div class="btn-row"><button class="btn good" id="startBtn">▶ ابدأوا اللعب</button></div>
-        <p class="note">مفتاح المسافة (Space) لرمي النرد · ⚙ لوحة المعلّم</p></div>`;
+        <p class="note">مفتاح المسافة (Space) لرمي النرد · اضغطوا على الشخصية لتضحك 😄 · ⚙ لوحة المعلّم</p></div>`;
       root().appendChild(sp);
-      $("#sn0", sp).value = names[0]; $("#sn1", sp).value = names[1];
+      const inputs = [$("#sn0", sp), $("#sn1", sp)];
+      inputs[0].value = names[0] || defName(0); inputs[1].value = names[1] || defName(1);
+      // إن كان الاسم المحفوظ مخصّصاً فلا نستبدله تلقائياً
+      [0, 1].forEach(i => { auto[i] = !names[i] || names[i] === defName(i); inputs[i].addEventListener("input", () => { auto[i] = false; }); });
+      const paint = () => {
+        sp.querySelectorAll(".char-grid").forEach(gr => {
+          const t = +gr.dataset.t;
+          gr.querySelectorAll(".char-opt").forEach(b => { b.classList.toggle("sel", b.dataset.id === sel[t]); b.classList.toggle("taken", b.dataset.id === sel[1 - t]); });
+        });
+      };
+      paint();
+      sp.querySelectorAll(".char-grid").forEach(gr => {
+        const t = +gr.dataset.t;
+        gr.querySelectorAll(".char-opt").forEach(b => b.addEventListener("click", () => {
+          const id = b.dataset.id, c = C.byId[id];
+          g.Sfx.resume();
+          if (id === sel[1 - t]) { g.Sfx.wrong(); g.gsap.fromTo(b, { x: -6 }, { x: 0, duration: .4, ease: "elastic.out(2,.3)" }); return; }   // مأخوذة
+          sel[t] = id; if (auto[t]) inputs[t].value = defName(t);
+          paint();
+          const im = $("img", b); im.src = C.url(id, "happy"); setTimeout(() => { im.src = C.url(id, "idle"); }, 1100);
+          g.Sfx.voice(c.pitch, "happy", c.voice === "robot");
+          if (!reduced) g.gsap.fromTo(b, { y: 0 }, { y: -16, duration: .16, yoyo: true, repeat: 1, ease: "power2.out" });
+        }));
+      });
       const go = async () => {
         g.Sfx.resume(); g.Sfx.click(); setKeys(null);
-        const n = [$("#sn0", sp).value.trim() || "فريق الشعلة", $("#sn1", sp).value.trim() || "فريق البرق"];
-        await closeAnim(sp, .35); resolve(n);
+        const n = [inputs[0].value.trim() || defName(0), inputs[1].value.trim() || defName(1)];
+        await closeAnim(sp, .35); resolve({ names: n, chars: sel.slice() });
       };
       $("#startBtn", sp).onclick = go;
-      setKeys({ onEnter: () => { if (document.activeElement && document.activeElement.tagName === "INPUT") go(); else go(); }, onEsc: () => { } });
+      setKeys({ onEnter: go, onEsc: () => { } });
       g.gsap.from(".splash-card", { y: 50, scale: .8, opacity: 0, duration: .7, ease: "back.out(1.6)" });
     });
   };
@@ -425,7 +509,8 @@
     return new Promise(resolve => {
       const w = state.winner, wt = state.teams[w];
       const sp = el("div", "splash"); sp.style.background = "radial-gradient(circle at 50% 40%, rgba(255,230,120,.25), rgba(10,20,10,.55))";
-      const card = (i) => `<div class="result ${i === 0 ? "red" : "blue"} ${i === w ? "win" : ""}"><b>${i === w ? "🏆 " : ""}${names[i]}</b>شفرات الطاقة: ${g.Num.digits(state.teams[i].shards)} ⚡<br>الإجابات الصحيحة: ${g.Num.digits(state.teams[i].correct)}</div>`;
+      const C = g.Chars, cimg = i => (C && C.assigned[i]) ? `<img class="res-char ${i === w ? "win" : ""}" src="${C.url(C.assigned[i], i === w ? "cheer" : "happy")}" alt="">` : "";
+      const card = (i) => `<div class="result ${i === 0 ? "red" : "blue"} ${i === w ? "win" : ""}">${cimg(i)}<b>${i === w ? "🏆 " : ""}${names[i]}</b>شفرات الطاقة: ${g.Num.digits(state.teams[i].shards)} ⚡<br>الإجابات الصحيحة: ${g.Num.digits(state.teams[i].correct)}</div>`;
       sp.innerHTML = `<div style="text-align:center;pointer-events:auto">
         <div class="win-banner">تم الإنقاذ! 🎉</div>
         <div class="splash-card" style="margin-top:calc(var(--u)*2)">

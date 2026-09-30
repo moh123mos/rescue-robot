@@ -57,6 +57,24 @@
     shard() { tone(1320, 0.25, "sine", 0.2); tone(1760, 0.35, "sine", 0.14, 0.06); tone(2640, 0.3, "sine", 0.06, 0.12); },
     reveal() { tone(440, 0.1, "triangle", 0.15); tone(660, 0.14, "triangle", 0.15, 0.07); },
     toast() { tone(587, 0.12, "triangle", 0.18); tone(784, 0.2, "triangle", 0.18, 0.1); },
+    /* صوت الشخصية: نقرات ناعمة بحسب pitch؛ robot = موجة مربعة + تذبذب */
+    voice(pitch = 1, kind = "talk", robot = false) {
+      const f0 = 330 * pitch, type = robot ? "square" : "triangle", vol = robot ? .09 : .2;
+      const seq = {
+        talk:   [[1, .09], [1.22, .08], [.94, .09], [1.12, .08]],
+        giggle: [[1.5, .07], [1.25, .07], [1.6, .07], [1.3, .07], [1.7, .09]],
+        happy:  [[1, .1], [1.26, .1], [1.5, .16]],
+        sad:    [[1.1, .18], [.9, .26]],
+        cheer:  [[1, .08], [1.26, .08], [1.5, .08], [2, .2]]
+      }[kind] || [[1, .1]];
+      let t = 0;
+      seq.forEach(([m, d], i) => {
+        const slide = robot ? null : (kind === "sad" ? f0 * m * .85 : f0 * m * (1 + (i % 2 ? -.06 : .08)));
+        tone(f0 * m, d, type, vol, t, slide);
+        if (robot) tone(f0 * m * 2.01, d * .8, "sine", .05, t);
+        t += d * .92;
+      });
+    },
     magic() { [0, 3, 7, 10, 14].forEach((n, i) => tone(semi(659, n), 0.3, "sine", 0.16, i * 0.07)); },
     engine(dur = 2.2) {
       const c = ensure(); if (!c || muted) return;

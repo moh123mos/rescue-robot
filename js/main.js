@@ -1,7 +1,7 @@
 /* main.js — المتحكّم: آلة الحالات SETUP → TURN_START → ROLLING → MOVING → TILE_EFFECT → RESOLVE → WIN */
 (function (g) {
   "use strict";
-  const { Logic, UI, View, Sfx, CARDS, gsap } = g;
+  const { Logic, UI, View, Sfx, CARDS, Chars, gsap } = g;
   const TILES = g.TILES_DATA, FINISH = Logic.FINISH, CFG = Logic.CONFIG;
   const params = new URLSearchParams(location.search);
   const DEBUG = params.get("debug") === "1";
@@ -11,7 +11,7 @@
   const TEAM_TAG = ["🔥", "⚡"];
   const TEAM_CONFETTI = [["#e43a2a", "#ff8a5c", "#ffd54a", "#ffffff"], ["#2f86e6", "#7fd0ff", "#ffd54a", "#ffffff"]];
 
-  let state, settings, history = [], pendingStage = null, busy = false, forcedRoll = null, actionResolve = null, restarting = false;
+  let state, settings, history = [], pendingStage = null, lastAwarded = 0, busy = false, forcedRoll = null, actionResolve = null, restarting = false;
 
   /* ---------------------------------------------------------------- الإعدادات المحفوظة (localStorage فقط) */
   const LS = {
@@ -22,6 +22,12 @@
   g.Num.eastern = settings.eastern;
 
   const nameOf = i => UI.teamName(i);
+  async function applyChars(ids) {
+    [0, 1].forEach(i => Chars.assign(i, ids[i]));
+    LS.set("chars", ids);
+    await Promise.all([0, 1].map(i => View.setCharacter(i, ids[i])));
+    UI.refreshCharacters();
+  }
   const team = i => state.teams[i];
 
   /* ---------------------------------------------------------------- تحكم بالسرعة (تخطي الحركات بالنقر) */
@@ -48,8 +54,9 @@
 
   /* ---------------------------------------------------------------- لعبة جديدة */
   function newGame() {
-    state = Logic.newState([nameOf(0), nameOf(1)], settings);
+    state = Logic.newState([nameOf(0), nameOf(1)], settings, Chars.assigned);
     history = []; pendingStage = null;
+    [0, 1].forEach(i => Chars.pose(i, "idle"));
     View.resetRobot(); View.setRobotPose(1);
     [0, 1].forEach(i => View.placePawn(i, 0));
     UI.setDie(null); syncAll(false);
@@ -65,7 +72,8 @@
   function waitForAction(ti) {
     setBusy(false);
     return new Promise(res => {
-      actionResolve = a => { if (!actionResolve) return; actionResolve = null; UI.setRollReady(false); res(a); };
+      Chars.setWaiting(ti, true);
+      actionResolve = a => { if (!actionResolve) return; actionResolve = null; Chars.setWaiting(ti, false); UI.setRollReady(false); res(a); };
       UI.setRollReady(true, () => actionResolve && actionResolve({ type: "roll" }), `دور ${nameOf(ti)} ${TEAM_TAG[ti]} — اضغطوا على منطقة النرد أو Space لرمي النرد 🎲`);
     });
   }
@@ -82,6 +90,7 @@
       try { await g.Dice3D.roll(v, UI.dieRect(), Sfx); } catch (e) { console.warn("Dice3D فشل، استخدام البديل", e); await fallbackDice(v); }
     } else await fallbackDice(v);
     UI.setDie(v);
+    if (v === 6) Chars.react(state.turn, "happy", { say: "roll6" }); else if (v === 1) Chars.say(state.turn, "rollLow");
     const d = document.querySelector("#hudDie");
     gsap.fromTo(d, { scale: 1.5 }, { scale: 1, duration: .5, ease: "elastic.out(1.4,.4)" });
     Sfx.diceHit(.6);
@@ -102,6 +111,7 @@
       g.confetti({ particleCount: 30, spread: 65, startVelocity: 28, scalar: .8, origin: { x: (r.left + r.width / 2) / innerWidth, y: (r.top + r.height) / innerHeight }, colors: ["#ffd54a", "#fff3a5", ...TEAM_CONFETTI[ti]], zIndex: 70 });
     }
     if (ch) pendingStage = ch.to;
+    lastAwarded = ti; Chars.react(ti, "happy", { say: "shard" });
     log(`${nameOf(ti)}: +${n} شفرة → ${team(ti).shards}`);
   }
   async function flushStage() {
@@ -110,6 +120,7 @@
     setBusy(true); busyHint();
     await sleep(250);
     UI.setStage(n);
+    Chars.react(lastAwarded, "cheer", { ms: 2600, say: "stage", sayDelay: 900 }); Chars.react(1 - lastAwarded, "happy", { ms: 2400 });
     await View.robotStage(n);
     UI.msgToast(`تقدّم الإنقاذ! المرحلة ${n} من ٥ 🤖`, 1800);
     await sleep(600);
@@ -126,7 +137,7 @@
   async function maybeBattery(ti, idx) {
     if (idx !== CFG.batteryTile || team(ti).battery) return;
     team(ti).battery = true;
-    View.batteryFlash();
+    View.batteryFlash(); Chars.say(ti, "battery");
     UI.msgToast("🔋 محطة البطارية! شفرة طاقة مجانية", 1700);
     await sleep(500);
     await awardShards(ti, CFG.rewards.battery, View.worldRect(g.BATTERY_SPOT.x, g.BATTERY_SPOT.y, 60, 60));
@@ -153,12 +164,12 @@
     setSpeed(1);
     const t = team(ti);
     if (o.allowKey && t.keys > 0) {
-      const k = await UI.showInfo({ type: "mystery", icon: "🗝️", title: "مفتاح البوابة", text: "معكم مفتاح ذهبي! هل تستخدمونه لتخطي هذا التحدي بدون الإجابة؟", sfx: "magic", buttons: [{ text: "🗝️ استخدموا المفتاح", cls: "purple" }, { text: "سنجيب بأنفسنا", cls: "gray" }] });
+      const k = await UI.showInfo({ ti, type: "mystery", icon: "🗝️", title: "مفتاح البوابة", text: "معكم مفتاح ذهبي! هل تستخدمونه لتخطي هذا التحدي بدون الإجابة؟", sfx: "magic", buttons: [{ text: "🗝️ استخدموا المفتاح", cls: "purple" }, { text: "سنجيب بأنفسنا", cls: "gray" }] });
       if (k === 0) { t.keys--; UI.syncTeam(ti, t); return { correct: true, key: true, rect: screenCenterRect() }; }
     }
     if (window.Sfx) Sfx.flip();
     await View.camHome(.35);
-    const r = await UI.showCard({ card, type, settings, teamName: nameOf(ti), wrongText: o.wrongText, bonusText: o.bonusText, icon: o.icon });
+    const r = await UI.showCard({ ti, card, type, settings, teamName: nameOf(ti), wrongText: o.wrongText, bonusText: o.bonusText, icon: o.icon });
     t.answers++; if (r.correct) t.correct++;
     return r;
   }
@@ -187,13 +198,13 @@
   async function mystery(ti) {
     const t = team(ti), card = pick("mystery", CARDS.mystery);
     await View.camHome(.35);
-    const first = card.effect === "oops" ? null : await UI.showInfo({ type: "mystery", icon: card.icon, title: card.title, text: card.text, sfx: "magic", buttons: [{ text: "✨ نفّذوا الأثر", cls: "purple" }] });
+    const first = card.effect === "oops" ? null : await UI.showInfo({ ti, type: "mystery", icon: card.icon, title: card.title, text: card.text, sfx: "magic", buttons: [{ text: "✨ نفّذوا الأثر", cls: "purple" }] });
     const dr = screenCenterRect();
     switch (card.effect) {
       case "slide2": {
         const path = Logic.pathFor(t.pos, 2);
         if (!path.length) return;
-        setBusy(true); busyHint();
+        setBusy(true); busyHint(); Chars.react(ti, "happy", { say: "slide", ms: 1600 });
         const from = t.pos; await View.slide(ti, path); t.pos = path[path.length - 1];
         for (const i of path) { roundBanner(i); await maybeBattery(ti, i); }
         View.showCounter(ti, null); setBusy(false);
@@ -205,20 +216,21 @@
       case "shortcut": {
         const target = Logic.shortcutTarget(t.pos);
         if (target <= t.pos) { UI.msgToast("أنتم بالفعل في أعلى مرحلة! 🎉", 2000); break; }
-        setBusy(true); busyHint();
+        setBusy(true); busyHint(); Chars.say(ti, "tunnel");
         const from = t.pos; await View.tunnel(ti, target); t.pos = target;
         if (from < CFG.batteryTile && target >= CFG.batteryTile) { await maybeBattery(ti, CFG.batteryTile); }
         roundBanner(target); setBusy(false);
         break;
       }
       case "oops": {
+        Chars.say(ti, "oops");
         const r = await askQuestion(ti, card, "mystery", { wrongText: "توقفوا لدورة واحدة 🌪️ — ثم تواصلون!", icon: card.icon });
         if (r.correct) UI.msgToast("🌪️ تبددت العاصفة! تابعوا اللعب", 2000);
         else { t.skip = 1; }
         break;
       }
       case "key":
-        t.keys++; Sfx.magic();
+        t.keys++; Sfx.magic(); Chars.react(ti, "happy", { say: "key" });
         await UI.flyIcon("🗝️", dr, UI.teamRect(ti));
         UI.syncTeam(ti, t, true);
         UI.msgToast("🗝️ احتفظوا بالمفتاح لتخطي تحدٍّ قادم", 2200);
@@ -230,7 +242,7 @@
   async function chooseFlow(ti) {
     const t = team(ti);
     await View.camHome(.35);
-    const k = await UI.showChoose(nameOf(ti));
+    const k = await UI.showChoose(nameOf(ti), ti);
     const card = CARDS.choose[k];
     const r = await askQuestion(ti, card, "choose", { icon: k === "safe" ? "🟢" : "🔥", bonusText: null });
     if (r.correct) {
@@ -263,7 +275,7 @@
         setBusy(false);
       }
     } else {
-      await UI.showInfo({ type: "comeback", icon: "💪", title: "فرصة عودة", text: "هذه الفرصة للفريق المتأخر فقط، وأنتم في المقدمة! أحسنتم 👏 ونمنحكم شفرة طاقة تشجيعية.", buttons: [{ text: "شكراً! ⚡", cls: "good" }] });
+      await UI.showInfo({ ti, type: "comeback", icon: "💪", title: "فرصة عودة", text: "هذه الفرصة للفريق المتأخر فقط، وأنتم في المقدمة! أحسنتم 👏 ونمنحكم شفرة طاقة تشجيعية.", buttons: [{ text: "شكراً! ⚡", cls: "good" }] });
       await awardShards(ti, R_ENC(), screenCenterRect());
     }
   }
@@ -272,7 +284,7 @@
   async function toolFlow(ti) {
     const t = team(ti), tools = CARDS.tools, tool = tools[Logic.randInt(tools.length)];
     await View.camHome(.35);
-    await UI.showInfo({ type: "tool", icon: tool.icon, title: `حصلتم على: ${tool.name}!`, text: "أداة إنقاذ جديدة تُضاف إلى صندوق أدوات فريقكم، ومعها شفرة طاقة ⚡", sfx: "magic", buttons: [{ text: "أضيفوها! 🧰", cls: "blue" }] });
+    await UI.showInfo({ ti, type: "tool", icon: tool.icon, title: `حصلتم على: ${tool.name}!`, text: "أداة إنقاذ جديدة تُضاف إلى صندوق أدوات فريقكم، ومعها شفرة طاقة ⚡", sfx: "magic", buttons: [{ text: "أضيفوها! 🧰", cls: "blue" }] });
     t.tools.push(tool.id);
     await UI.flyIcon(tool.icon, screenCenterRect(), UI.teamRect(ti));
     UI.syncTeam(ti, t, true);
@@ -283,6 +295,7 @@
   async function playTurn() {
     const ti = state.turn;
     UI.setActive(ti); View.setActiveTeam(ti);
+    Chars.react(ti, "turn", { say: "turn", sayDelay: 450 });
     history.push(JSON.stringify(state)); if (history.length > 30) history.shift();
     await View.camHome(.6);
     const act = await waitForAction(ti);
@@ -314,6 +327,7 @@
     setBusy(true); busyHint();
     UI.setRollReady(false);
     UI.setStage(5);
+    Chars.react(w, "cheer", { ms: 600000, say: "win", sayDelay: 1500 }); Chars.react(1 - w, "happy", { ms: 600000, say: "lose", sayDelay: 2500 });
     await View.winScene(w);
     const colors = TEAM_CONFETTI[w];
     if (g.confetti) {
@@ -329,8 +343,9 @@
   /* ---------------------------------------------------------------- الحلقة الكبرى */
   async function mainLoop() {
     const saved = LS.get("names", []);
-    const names = await UI.showSplash([saved[0] || "فريق الشعلة", saved[1] || "فريق البرق"]);
-    UI.setName(0, names[0]); UI.setName(1, names[1]); persistNames();
+    const r = await UI.showSplash([saved[0] || "", saved[1] || ""], Chars.assigned);
+    UI.setName(0, r.names[0]); UI.setName(1, r.names[1]); persistNames();
+    if (Chars.ready) await applyChars(r.chars);
     applySettings();
     while (true) {                         // «العب مجدداً» / إعادة اللعبة تبدأ لعبة جديدة بنفس الفريقين
       restarting = false;
@@ -376,6 +391,7 @@
       <div>اذهب إلى مربع: <select id="dbgTile">${TILES.map(t => `<option value="${t.i}">${t.i} ${t.type}</option>`).join("")}</select><button id="dbgGo">اذهب</button></div>
       <div>أثر فوري: <select id="dbgType">${["challenge", "mystery", "team", "choose", "comeback", "hazard", "spot", "tool"].map(x => `<option>${x}</option>`).join("")}</select><button id="dbgFx">نفّذ</button></div>
       <div>شفرات: <button id="dbgSh0">+1 🔴</button><button id="dbgSh1">+1 🔵</button><button id="dbgSh3">+3 🔴</button></div>
+      <div>شخصية: <select id="dbgCh">${["happy", "sad", "cheer", "turn"].map(x => `<option>${x}</option>`).join("")}</select><button id="dbgC0">🔴</button><button id="dbgC1">🔵</button> <select id="dbgPh">${Object.keys(g.PHRASES).map(x => `<option>${x}</option>`).join("")}</select><button id="dbgS0">قل🔴</button><button id="dbgS1">قل🔵</button></div>
       <div><button id="dbgCopy">📋 نسخ JSON للمربعات</button><button id="dbgGrid">شبكة</button><button id="dbgHide">إخفاء النقاط</button></div>
       <div style="opacity:.7;font-size:11px">اسحب النقاط الوردية لتعديل المربعات. سيان = via، برتقالي = leap، أخضر = البطارية.</div>`;
     document.body.appendChild(panel);
@@ -386,6 +402,7 @@
     panel.querySelector("#dbgSh0").onclick = async () => { await awardShards(0, 1); await flushStage(); };
     panel.querySelector("#dbgSh1").onclick = async () => { await awardShards(1, 1); await flushStage(); };
     panel.querySelector("#dbgSh3").onclick = async () => { await awardShards(0, 3); await flushStage(); };
+    [0, 1].forEach(i => { panel.querySelector("#dbgC" + i).onclick = () => Chars.react(i, panel.querySelector("#dbgCh").value); panel.querySelector("#dbgS" + i).onclick = () => Chars.say(i, panel.querySelector("#dbgPh").value); });
     panel.querySelector("#dbgCopy").onclick = () => { const js = JSON.stringify(TILES.map(t => t)); navigator.clipboard && navigator.clipboard.writeText(js); console.log(js); pos.textContent = "نُسخ JSON (وطُبع في console)"; };
     panel.querySelector("#dbgHide").onclick = () => { L.visible = !L.visible; };
     // سحب النقاط + طباعة الإحداثيات
@@ -416,7 +433,13 @@
     g.gsap.registerPlugin(g.MotionPathPlugin);
     UI.buildHud();
     try { await (document.fonts && document.fonts.ready); } catch (e) { /* ignore */ }
+    await Chars.load();
     await View.init(document.getElementById("stageHost"), document.getElementById("hud"));
+    if (Chars.ready) {
+      const sv = LS.get("chars", []), ids = Chars.list.map(c => c.id);
+      const a = ids.includes(sv[0]) ? sv[0] : ids[0], b = ids.includes(sv[1]) && sv[1] !== a ? sv[1] : ids.find(x => x !== a);
+      await applyChars([a, b]); Chars.start();
+    }
     UI.bindNames(() => persistNames());
     const saved = LS.get("names", null);
     if (saved) { UI.setName(0, saved[0] || ""); UI.setName(1, saved[1] || ""); }
@@ -425,7 +448,7 @@
     $("#btnMusic").onclick = () => { Sfx.resume(); settings.music = !settings.music; applySettings(); };
     $("#btnGear").onclick = () => { Sfx.resume(); Sfx.click(); UI.toggleTeacher(teacherApi); };
     document.addEventListener("pointerdown", () => Sfx.resume(), { once: true });
-    state = Logic.newState(["", ""], settings);
+    state = Logic.newState(["", ""], settings, Chars.assigned);
     [0, 1].forEach(i => View.placePawn(i, 0));
     View.setActiveTeam(0);
     syncAll(false);

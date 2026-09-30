@@ -89,6 +89,8 @@
     L.bg.addChild(new PIXI.Sprite(T.board));
     buildPit(); buildGate(); buildAmbient(); buildTileIcons(); buildPawns();
     app.ticker.add(tick);
+    app.canvas.addEventListener("pointermove", e => { View.pointer = View.clientToWorld(e.clientX, e.clientY); });
+    app.canvas.addEventListener("pointerleave", () => { View.pointer = null; });
     g.addEventListener("resize", applyCamera);
     applyCamera();
     View.ready = true;
@@ -315,13 +317,29 @@
       const ring = new PIXI.Sprite(T.glow); ring.anchor.set(.5); ring.blendMode = "add"; ring.tint = TEAM_COLORS[ti]; ring.width = 120; ring.height = 70; L.shadows.addChild(ring);
       const root = new PIXI.Container(); L.pawns.addChild(root);
       const body = new PIXI.Sprite(T.pawn[ti]); body.anchor.set(.5, .97); body.scale.set(.46); root.addChild(body);
+      body.eventMode = "static"; body.cursor = "pointer"; body.on("pointertap", () => { if (g.Chars && g.Chars.assigned[ti]) g.Chars.poke(ti); });
       const counter = new PIXI.Container();
       const bg = new PIXI.Graphics().circle(0, 0, 17).fill(0x1a1a2e).stroke({ width: 3, color: 0xffc72c });
       const tx = new PIXI.Text({ text: "", style: { fontFamily: "Cairo, sans-serif", fontSize: 24, fontWeight: "900", fill: 0xffffff } }); tx.anchor.set(.5);
       counter.addChild(bg, tx); counter.tx = tx; counter.position.set(0, -92); counter.visible = false; root.addChild(counter);
-      pawns.push({ root, body, shadow, ring, counter, tile: 0, gx: 0, gy: 0, h: 0 });
+      pawns.push({ root, body, shadow, ring, counter, tile: 0, gx: 0, gy: 0, h: 0, base: .46, lean: 0, pose: "idle", tex: {} });
     });
+    if (g.Chars) g.Chars.hopListeners.push(ti => { const p = pawns[ti]; if (p && !p.moving && p.root.visible) View.jumpInPlace(ti); });
   }
+
+  /* ---------------------------------------------------------------- الشخصيات على المسار */
+  const CHAR_BOARD_H = 92;      // ارتفاع إطار الشخصية على اللوحة (px لوحة)
+  View.setCharacter = async function (ti, id) {
+    const p = pawns[ti], C = g.Chars, m = C && C.meta[id];
+    if (!m) return;
+    const tex = {};
+    await Promise.all(m.poses.map(async pose => { tex[pose] = await PIXI.Assets.load({ alias: `ch_${id}_${pose}`, src: C.url(id, pose, true), data: { autoGenerateMipmaps: true, scaleMode: "linear" } }); }));
+    p.tex = tex; p.charId = id; p.base = CHAR_BOARD_H / m.h;
+    p.body.texture = tex.idle; p.body.anchor.set(m.cx / m.w, m.baseline / m.h); p.body.scale.set(p.base); p.body.y = 0; p.pose = "idle";
+    p.counter.position.set(0, -(m.baseline * .86 * p.base) - 14);
+    if (p.unbind) p.unbind();
+    p.unbind = C.bind("pawn", ti, (pose) => { if (p.moving && pose === "blink") return; if (p.tex[pose]) { p.pose = pose; p.body.texture = p.tex[pose]; } });
+  };
   function slotOffset(ti, tile) {
     const o = pawns[1 - ti]; return o && o.tile === tile && o.placed ? (ti === 0 ? -15 : 15) : 0;
   }
@@ -348,18 +366,21 @@
     });
   };
   View.pawnWorld = ti => ({ x: pawns[ti].gx, y: pawns[ti].gy });
+  View.pawnHeight = ti => { const p = pawns[ti], m = g.Chars && g.Chars.meta[p.charId]; return m ? m.baseline * p.base : 80; };
   View.setActiveTeam = function (ti) { activeTeam = ti; };
   View.showCounter = function (ti, n) {
     const c = pawns[ti].counter; if (n == null) { c.visible = false; return; }
     c.visible = true; c.tx.text = g.Num.digits(n); c.scale.set(.4); gsap.to(c.scale, { x: 1, y: 1, duration: .3, ease: "back.out(3)" });
   };
   View.jumpInPlace = function (ti) {
-    const p = pawns[ti]; return new Promise(res => gsap.timeline({ onComplete: res })
-      .to(p.body.scale, { x: .5, y: .38, duration: .08 })
-      .to(p.body.scale, { x: .42, y: .52, duration: .1 })
-      .to(p.root, { y: p.root.y - 34, duration: .2, ease: "power2.out" }, "<")
-      .to(p.root, { y: p.root.y, duration: .2, ease: "bounce.out" })
-      .to(p.body.scale, { x: .46, y: .46, duration: .2, ease: "elastic.out(1.2,.4)" }, "<.1"));
+    const p = pawns[ti], b = p.base; if (p.jumping) return Promise.resolve();
+    p.jumping = true; const y0 = p.root.y;
+    return new Promise(res => gsap.timeline({ onComplete: () => { p.jumping = false; p.root.y = y0; res(); } })
+      .to(p.body.scale, { x: b * 1.09, y: b * .83, duration: .08 })
+      .to(p.body.scale, { x: b * .91, y: b * 1.13, duration: .1 })
+      .to(p.root, { y: y0 - 34, duration: .2, ease: "power2.out" }, "<")
+      .to(p.root, { y: y0, duration: .2, ease: "bounce.out" })
+      .to(p.body.scale, { x: b, y: b, duration: .2, ease: "elastic.out(1.2,.4)" }, "<.1"));
   };
 
   /* حركة أساسية: تتبع مسار أرضي (MotionPath) + ارتفاع قوس + تمدد/ضغط + ظل + غبار */
@@ -367,9 +388,10 @@
     const p = pawns[ti]; p.moving = true;
     const dur = (reduced ? .7 : 1) * (o.dur || .36), H = o.height == null ? 40 : o.height;
     const proxy = { x: pts[0].x, y: pts[0].y, t: 0 };
-    const base = .46;
+    const base = p.base;
+    if (g.Chars && g.Chars.assigned[ti]) g.Chars.pose(ti, "jump", 0, ["pawn"]);
     return new Promise(resolve => {
-      const tl = gsap.timeline({ onComplete: () => { p.moving = false; resolve(); } });
+      const tl = gsap.timeline({ onComplete: () => { p.moving = false; if (g.Chars && g.Chars.assigned[ti]) g.Chars.pose(ti, "idle", 0, ["pawn"]); resolve(); } });
       if (o.squash !== false) tl.to(p.body.scale, { x: base * 1.18, y: base * .78, duration: .07, ease: "power2.out" });
       const t0 = tl.duration();
       tl.to(p.body.scale, { x: base * .86, y: base * 1.2, duration: .1, ease: "power1.out" }, t0);
@@ -429,7 +451,7 @@
     gsap.to(hole2.scale, { x: 1, y: 1, duration: .25, ease: "back.out(2)" });
     p.root.visible = true; p.shadow.visible = true; p.ring.visible = true; p.body.scale.set(.05);
     sparkAt(pt.x, pt.y - 10, { n: 16, color: 0xc9a0ff, speed: 150, life: .7, size: .4, tex: "star", gravity: 60 });
-    await new Promise(res => gsap.timeline({ onComplete: res }).to(p.body.scale, { x: .55, y: .55, duration: .35, ease: "back.out(3)" }).to(p.body.scale, { x: .46, y: .46, duration: .2 }));
+    await new Promise(res => gsap.timeline({ onComplete: res }).to(p.body.scale, { x: p.base * 1.2, y: p.base * 1.2, duration: .35, ease: "back.out(3)" }).to(p.body.scale, { x: p.base, y: p.base, duration: .2 }));
     gsap.to(hole2.scale, { x: 0, y: 0, duration: .25, onComplete: () => hole2.destroy() });
     View.pressTile(to); View.layoutPawns();
   };
@@ -512,7 +534,13 @@
     pawns.forEach((p, ti) => {
       const act = ti === activeTeam;
       p.ring.alpha = act ? .35 + .3 * (.5 + .5 * Math.sin(time * 4)) : .08; p.ring.width = 110 + (act ? 14 * Math.sin(time * 4) : 0); p.ring.height = p.ring.width * .55;
-      if (!p.moving && p.placed) p.body.y = Math.sin(time * 3 + ti * 2) * 1.4 * (act ? 1.6 : 1);
+      if (!p.moving && p.placed) {
+        p.body.y = Math.sin(time * 3 + ti * 2) * 1.0 * (act ? 1.5 : 1);
+        // ميلان لطيف نحو المؤشر/اللمس عند القرب
+        let target = 0;
+        if (View.pointer && !reduced) { const dx = View.pointer.x - p.gx, dy = View.pointer.y - p.gy; if (Math.abs(dx) < 230 && dy > -230 && dy < 110) target = clamp(dx / 170, -1, 1) * .09; }
+        p.lean += (target - p.lean) * .12; p.body.rotation = p.lean;
+      } else p.body.rotation = 0;
     });
   }
 

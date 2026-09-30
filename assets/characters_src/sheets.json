@@ -1,0 +1,8 @@
+[
+  {
+    "file": "sheet_all.png",
+    "cols": 7,
+    "poses": ["idle", "blink", "talk", "jump", "happy", "sad", "cheer"],
+    "rows": ["kid_boy", "kid_girl", "kid_bot"]
+  }
+]

@@ -26,10 +26,10 @@
     return a;
   }
 
-  function newState(names, settings) {
+  function newState(names, settings, chars) {
     return {
       v: 1,
-      teams: [0, 1].map(i => ({ name: names[i] || "", pos: 0, shards: 0, tools: [], keys: 0, skip: 0, battery: false, answers: 0, correct: 0 })),
+      teams: [0, 1].map(i => ({ name: names[i] || "", char: (chars && chars[i]) || null, pos: 0, shards: 0, tools: [], keys: 0, skip: 0, battery: false, answers: 0, correct: 0 })),
       turn: 0, turnCount: 0, extraRoll: false,
       round: 1, robotStage: 1, decks: {}, over: false, winner: null,
       settings: Object.assign({ mode: "teacher", timer: 0, sound: true, eastern: true, music: true }, settings || {})
